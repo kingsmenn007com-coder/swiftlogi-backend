@@ -14,7 +14,20 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 // Middleware Setup
-app.use(cors());
+const allowedOrigins = ['https://YOUR_VERCEL_URL', 'http://localhost:5173']; 
+
+app.use(cors({
+    origin: (origin, callback) => {
+        // Allow requests with no origin (like mobile apps or curl) or from our specific list
+        if (!origin || allowedOrigins.includes(origin)) {
+            callback(null, true);
+        } else {
+            callback(new Error('Not allowed by CORS'));
+        }
+    },
+    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
+    credentials: true,
+}));
 app.use(express.json());
 
 // --- JWT AUTH MIDDLEWARE ---
