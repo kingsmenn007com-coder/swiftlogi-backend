@@ -16,18 +16,21 @@ const PORT = process.env.PORT || 5000;
 // Middleware Setup
 const allowedOrigins = ['https://YOUR_VERCEL_URL', 'http://localhost:5173']; 
 
+// Add this new variable near the top imports
+const cors = require('cors');
+
+// ... (Your other imports here)
+
+// NEW: Define the trusted origin URL from the environment (Render)
+const allowedOrigin = process.env.CORS_ORIGIN || 'http://localhost:5173';
+
+// --- MIDDLEWARE (Simple, Reliable CORS Configuration) ---
 app.use(cors({
-    origin: (origin, callback) => {
-        // Allow requests with no origin (like mobile apps or curl) or from our specific list
-        if (!origin || allowedOrigins.includes(origin)) {
-            callback(null, true);
-        } else {
-            callback(new Error('Not allowed by CORS'));
-        }
-    },
+    origin: allowedOrigin,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
     credentials: true,
 }));
+// ... (rest of your server.js code remains the same)
 app.use(express.json());
 
 // --- JWT AUTH MIDDLEWARE ---
