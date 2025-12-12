@@ -11,7 +11,7 @@ const jwt = require('jsonwebtoken');
 // Import Models
 const User = require('./models/User');
 const Product = require('./models/Product');
-const Order = require('./models/Order');
+const Order = require('./models/Order'); // Ensure Order is imported
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -54,14 +54,28 @@ const auth = (req, res, next) => {
     }
 };
 
-// USER REGISTRATION (Needed for curl command to work)
+// USER REGISTRATION
 app.post('/api/register', async (req, res) => {
     try {
         const { name, email, password, role } = req.body;
         if (!email || !password) return res.status(400).json({ error: "Please enter all required fields" });
 
         const existingUser = await User.findOne({ email });
-        if (existingUser) return res.status(400).json({ error: "User already exists" });
+        // NOTE: Allowing overwrite for development simplicity. In production, this should block registration.
+        if (existingUser) {
+            // If user exists, update password and role (for testing multiple roles)
+            const salt = await bcrypt.genSalt(10);
+            existingUser.password = await bcrypt.hash(password, salt);
+            existingUser.role = role || 'buyer';
+            await existingUser.save();
+
+            const token = jwt.sign({ id: existingUser._id, role: existingUser.role }, process.env.JWT_SECRET, { expiresIn: '1h' });
+            return res.status(200).json({
+                message: "User updated successfully!",
+                token,
+                user: { id: existingUser._id, name: existingUser.name, email: existingUser.email, role: existingUser.role }
+            });
+        }
 
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
@@ -113,18 +127,40 @@ app.get('/api/products', auth, async (req, res) => {
     }
 });
 
-// ORDER ROUTE (Income Logic)
+// ORDER ROUTE (Income Logic) - FULLY IMPLEMENTED
 app.post('/api/orders', auth, async (req, res) => {
-    // This is the core logic that tracks income
     const COMMISSION_RATE = 0.10; 
-    const { price, deliveryFee } = req.body;
-    const calculatedCommission = price * COMMISSION_RATE;
-    
-    // (Simplified response)
-    res.status(201).json({ 
-        message: 'Order created successfully. Commission tracked.',
-        yourCommission: calculatedCommission
-    });
+    try {
+        const { productId, price, deliveryFee } = req.body;
+        const buyerId = req.user.id; // Extracted from JWT token via auth middleware
+
+        if (!productId || !price) {
+            return res.status(400).json({ error: 'Missing required order fields.' });
+        }
+
+        const calculatedCommission = price * COMMISSION_RATE;
+
+        const newOrder = new Order({
+            productId,
+            buyerId,
+            totalPrice: price + (deliveryFee || 0),
+            commission: calculatedCommission,
+            status: 'Placed',
+            orderDate: new Date(),
+        });
+
+        const savedOrder = await newOrder.save();
+
+        res.status(201).json({ 
+            message: 'Order created successfully. Commission tracked.',
+            order: savedOrder,
+            yourCommission: calculatedCommission
+        });
+
+    } catch (err) {
+        console.error("Order creation error:", err);
+        res.status(500).json({ error: err.message });
+    }
 });
 
 // Start Server
