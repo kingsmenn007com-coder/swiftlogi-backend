@@ -1,45 +1,40 @@
 const mongoose = require('mongoose');
 
 const OrderSchema = new mongoose.Schema({
-    buyer: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'User',
-        required: true
-    },
-    seller: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'User',
-        required: true
-    },
-    rider: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'User',
-        default: null // Assigned later
-    },
+    // Link to the Product that was ordered
     product: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Product',
         required: true
     },
-    // --- FINANCIAL/LOGISTICS DATA ---
-    deliveryFee: {
-        type: Number,
-        default: 1500 // Base Fee (₦1,500)
+    // Link to the User who placed the order
+    buyer: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        required: true
     },
+    // Total price including delivery fee (for tracking)
     totalAmount: {
         type: Number,
-        required: true // Price + Delivery Fee
+        required: true
     },
+    // The seller of the product (needed for easy lookup and commission calculation)
+    seller: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        required: true
+    },
+    // Commission earned by the platform
     commission: {
         type: Number,
-        default: 0 // Your system profit
+        required: true
     },
     status: {
         type: String,
-        enum: ['pending', 'processing', 'shipping', 'delivered', 'cancelled'],
-        default: 'pending'
+        enum: ['Placed', 'Processing', 'Shipped', 'Delivered', 'Cancelled'],
+        default: 'Placed'
     },
-    createdAt: {
+    orderDate: {
         type: Date,
         default: Date.now
     }
