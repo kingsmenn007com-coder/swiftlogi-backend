@@ -13,15 +13,15 @@ const OrderSchema = new mongoose.Schema({
         ref: 'User',
         required: true
     },
-    // Total price including delivery fee (for tracking)
-    totalAmount: {
-        type: Number,
-        required: true
-    },
     // The seller of the product (needed for easy lookup and commission calculation)
     seller: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
+        required: true
+    },
+    // Total price including delivery fee (for tracking)
+    totalAmount: {
+        type: Number,
         required: true
     },
     // Commission earned by the platform

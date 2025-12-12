@@ -11,7 +11,7 @@ const jwt = require('jsonwebtoken');
 // Import Models
 const User = require('./models/User');
 const Product = require('./models/Product');
-const Order = require('./models/Order'); // Ensure Order is imported
+const Order = require('./models/Order');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -120,7 +120,8 @@ app.post('/api/login', async (req, res) => {
 // GET ALL PRODUCTS (Example Protected Route)
 app.get('/api/products', auth, async (req, res) => {
     try {
-        const products = await Product.find({});
+        // Populate the seller field to return seller details in the JSON
+        const products = await Product.find({}).populate('seller', 'name email');
         res.json(products);
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -131,19 +132,29 @@ app.get('/api/products', auth, async (req, res) => {
 app.post('/api/orders', auth, async (req, res) => {
     const COMMISSION_RATE = 0.10; 
     try {
-        const { productId, price, deliveryFee } = req.body;
+        const { productId, deliveryFee } = req.body;
         const buyerId = req.user.id; // Extracted from JWT token via auth middleware
 
-        if (!productId || !price) {
-            return res.status(400).json({ error: 'Missing required order fields.' });
+        // CRITICAL STEP: Fetch the full product data to get price and seller ID
+        const product = await Product.findById(productId);
+
+        if (!product) {
+            return res.status(404).json({ error: 'Product not found.' });
         }
 
+        const price = product.price; // Base price
+        const sellerId = product.seller; // Seller's ObjectId
+
+        // Calculate totals
+        const totalAmount = price + (deliveryFee || 0);
         const calculatedCommission = price * COMMISSION_RATE;
 
+        // Create the new order document
         const newOrder = new Order({
-            productId,
-            buyerId,
-            totalPrice: price + (deliveryFee || 0),
+            product: productId,
+            buyer: buyerId,
+            seller: sellerId, // Now correctly populated
+            totalAmount: totalAmount, // Now correctly populated
             commission: calculatedCommission,
             status: 'Placed',
             orderDate: new Date(),
@@ -159,7 +170,8 @@ app.post('/api/orders', auth, async (req, res) => {
 
     } catch (err) {
         console.error("Order creation error:", err);
-        res.status(500).json({ error: err.message });
+        // If the error is still a validation error, it means we missed a required field
+        res.status(500).json({ error: `Order creation failed: ${err.message}` });
     }
 });
 
