@@ -57,22 +57,77 @@ const auth = (req, res, next) => {
     }
 };
 
-// ... (User Registration and Login routes omitted for brevity) ...
+// --- USER REGISTRATION ROUTE ---
+app.post('/api/register', async (req, res) => {
+    try {
+        const { name, email, password, role } = req.body;
+        if (!email || !password) return res.status(400).json({ error: "Please enter all required fields" });
+        const existingUser = await User.findOne({ email });
 
-// GET ALL PRODUCTS (Protected Route) - FINAL FIX
+        if (existingUser) {
+            const salt = await bcrypt.genSalt(10);
+            existingUser.password = await bcrypt.hash(password, salt);
+            existingUser.role = role || 'buyer';
+            await existingUser.save();
+
+            const token = jwt.sign({ id: existingUser._id, role: existingUser.role }, process.env.JWT_SECRET, { expiresIn: '1h' });
+            return res.status(200).json({
+                message: "User updated successfully!",
+                token,
+                user: { id: existingUser._id, name: existingUser.name, email: existingUser.email, role: existingUser.role }
+            });
+        }
+
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash(password, salt);
+        const newUser = new User({ name, email, password: hashedPassword, role: role || 'buyer' });
+        const savedUser = await newUser.save();
+
+        const token = jwt.sign({ id: savedUser._id, role: savedUser.role }, process.env.JWT_SECRET, { expiresIn: '1h' });
+        res.status(201).json({
+            message: "User registered successfully!",
+            token,
+            user: { id: savedUser._id, name: savedUser.name, email: savedUser.email, role: savedUser.role }
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// --- USER LOGIN ROUTE ---
+app.post('/api/login', async (req, res) => {
+    try {
+        const { email, password } = req.body;
+        const user = await User.findOne({ email });
+        if (!user) return res.status(400).json({ error: "User not found" });
+
+        const isMatch = await bcrypt.compare(password, user.password);
+        if (!isMatch) return res.status(400).json({ error: "Invalid credentials" });
+
+        const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: '1h' });
+
+        res.json({
+            token,
+            user: { id: user._id, email: user.email, role: user.role }
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// GET ALL PRODUCTS (Protected Route)
 app.get('/api/products', auth, async (req, res) => {
     try {
         // CRITICAL FIX: Populate the seller field to send the seller object to the Frontend
         const products = await Product.find({})
-            .populate('seller', 'name'); // Populate the seller field, only including the 'name' 
-                                        // The rest of the seller object (including _id) will be available.
+            .populate('seller', 'name'); 
         res.json(products);
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
 
-// ORDER ROUTE (Income Logic) - FINAL FIX
+// ORDER ROUTE (Income Logic)
 app.post('/api/orders', auth, async (req, res) => {
     const COMMISSION_RATE = 0.10; 
     try {
