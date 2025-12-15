@@ -16,19 +16,38 @@ const Order = require('./models/Order');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Define the trusted origin URL (uses Render variable or local fallback)
-const allowedOrigin = process.env.CORS_ORIGIN || 'http://localhost:5173';
+// Define the list of trusted origins (CRITICAL FIX for CORS)
+const allowedOrigins = [
+    'http://localhost:5173', // For local development
+    'https://swiftlogi-prototype.vercel.app', // Your Vercel Frontend
+    // Note: We use the explicit URL from the Vercel deploy
+];
 
 // --- MIDDLEWARE ---
-app.use(cors({ origin: allowedOrigin, methods: 'GET,HEAD,PUT,PATCH,POST,DELETE', credentials: true }));
+// Robust CORS Configuration - NOW USES ARRAY
+app.use(cors({
+    origin: function (origin, callback) {
+        // Allow requests with no origin (like mobile apps or curl requests)
+        if (!origin) return callback(null, true);
+        if (allowedOrigins.indexOf(origin) === -1) {
+            const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+            return callback(new Error(msg), false);
+        }
+        return callback(null, true);
+    },
+    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
+    credentials: true,
+}));
+
+// Required to parse JSON bodies
 app.use(express.json());
 
-// --- DATABASE CONNECTION (omitted for brevity, assume unchanged)
+// --- DATABASE CONNECTION ---
 mongoose.connect(process.env.MONGO_URI)
     .then(() => console.log("✅ MongoDB Connected Successfully"))
     .catch(err => console.error("❌ MongoDB Connection Error:", err));
 
-// JWT Auth Middleware (omitted for brevity, assume unchanged)
+// JWT Auth Middleware
 const auth = (req, res, next) => {
     try {
         const token = req.header('Authorization').replace('Bearer ', '');
@@ -40,7 +59,63 @@ const auth = (req, res, next) => {
     }
 };
 
-// ... (User Registration and Login routes omitted for brevity) ...
+// USER REGISTRATION (omitted for brevity, assume unchanged)
+app.post('/api/register', async (req, res) => {
+    try {
+        const { name, email, password, role } = req.body;
+        if (!email || !password) return res.status(400).json({ error: "Please enter all required fields" });
+        const existingUser = await User.findOne({ email });
+
+        if (existingUser) {
+            const salt = await bcrypt.genSalt(10);
+            existingUser.password = await bcrypt.hash(password, salt);
+            existingUser.role = role || 'buyer';
+            await existingUser.save();
+
+            const token = jwt.sign({ id: existingUser._id, role: existingUser.role }, process.env.JWT_SECRET, { expiresIn: '1h' });
+            return res.status(200).json({
+                message: "User updated successfully!",
+                token,
+                user: { id: existingUser._id, name: existingUser.name, email: existingUser.email, role: existingUser.role }
+            });
+        }
+
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash(password, salt);
+        const newUser = new User({ name, email, password: hashedPassword, role: role || 'buyer' });
+        const savedUser = await newUser.save();
+
+        const token = jwt.sign({ id: savedUser._id, role: savedUser.role }, process.env.JWT_SECRET, { expiresIn: '1h' });
+        res.status(201).json({
+            message: "User registered successfully!",
+            token,
+            user: { id: savedUser._id, name: savedUser.name, email: savedUser.email, role: savedUser.role }
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// USER LOGIN (omitted for brevity, assume unchanged)
+app.post('/api/login', async (req, res) => {
+    try {
+        const { email, password } = req.body;
+        const user = await User.findOne({ email });
+        if (!user) return res.status(400).json({ error: "User not found" });
+
+        const isMatch = await bcrypt.compare(password, user.password);
+        if (!isMatch) return res.status(400).json({ error: "Invalid credentials" });
+
+        const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: '1h' });
+
+        res.json({
+            token,
+            user: { id: user._id, email: user.email, role: user.role }
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
 
 // GET ALL PRODUCTS (Protected Route)
 app.get('/api/products', auth, async (req, res) => {
@@ -52,11 +127,10 @@ app.get('/api/products', auth, async (req, res) => {
     }
 });
 
-// ORDER ROUTE (Income Logic) - FINAL FIX
+// ORDER ROUTE (Income Logic)
 app.post('/api/orders', auth, async (req, res) => {
     const COMMISSION_RATE = 0.10; 
     try {
-        // UPDATED: Now expecting sellerId and price from the Frontend
         const { productId, price, sellerId, deliveryFee } = req.body;
         const buyerId = req.user.id; 
 
@@ -71,7 +145,7 @@ app.post('/api/orders', auth, async (req, res) => {
         const newOrder = new Order({
             product: productId,
             buyer: buyerId,
-            seller: sellerId, // Directly using the ID passed from the frontend
+            seller: sellerId,
             totalAmount: totalAmount, 
             commission: calculatedCommission,
             status: 'Placed',
@@ -92,7 +166,7 @@ app.post('/api/orders', auth, async (req, res) => {
     }
 });
 
-// Start Server (omitted for brevity, assume unchanged)
+// Start Server
 app.listen(PORT, () => {
     console.log(`🚀 Server running on http://localhost:${PORT}`);
 });
