@@ -1,172 +1,179 @@
-// Configuration MUST be at the very top to load secrets
-require('dotenv').config(); 
-
-// Import Dependencies
 const express = require('express');
 const mongoose = require('mongoose');
-const cors = require('cors'); 
-const bcrypt = require('bcryptjs');
+const cors = require('cors');
 const jwt = require('jsonwebtoken');
-
-// Import Models
-const User = require('./models/User');
-const Product = require('./models/Product');
-const Order = require('./models/Order');
+const bcrypt = require('bcryptjs');
 
 const app = express();
-const PORT = process.env.PORT || 5000;
 
-// Define the list of trusted origins (CRITICAL FIX for CORS)
-const allowedOrigins = [
-    'http://localhost:5173', // For local development
-    'https://swiftlogi-prototype.vercel.app', // Your Vercel Frontend
-];
+// --- Configuration ---
+// Ensure you set this in your Render environment variables!
+const MONGO_URI = process.env.MONGO_URI; 
+const JWT_SECRET = process.env.JWT_SECRET || 'your_fallback_secret_key'; // CHANGE THIS!
+const PORT = process.env.PORT || 3001;
+const COMMISSION_RATE = 0.05; // 5% commission
 
-// --- MIDDLEWARE ---
-// Robust CORS Configuration
-app.use(cors({
-    origin: function (origin, callback) {
-        if (!origin) return callback(null, true);
-        if (allowedOrigins.indexOf(origin) === -1) {
-            const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
-            return callback(new Error(msg), false);
-        }
-        return callback(null, true);
-    },
-    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
-    credentials: true,
-}));
+// --- Middleware ---
+app.use(cors()); // Allows cross-origin requests from Vercel Frontend
+app.use(express.json()); // Body parser for JSON requests
 
-// Required to parse JSON bodies
-app.use(express.json());
+// --- Database Connection ---
+mongoose.connect(MONGO_URI)
+    .then(() => console.log('MongoDB connected successfully.'))
+    .catch(err => console.error('MongoDB connection error:', err));
 
-// --- DATABASE CONNECTION ---
-mongoose.connect(process.env.MONGO_URI)
-    .then(() => console.log("✅ MongoDB Connected Successfully"))
-    .catch(err => console.error("❌ MongoDB Connection Error:", err));
+// --- Database Schemas ---
 
-// JWT Auth Middleware
+const UserSchema = new mongoose.Schema({
+    name: { type: String, required: true },
+    email: { type: String, required: true, unique: true },
+    password: { type: String, required: true },
+    role: { type: String, enum: ['buyer', 'seller', 'rider', 'admin'], default: 'buyer' }
+});
+// Hash password before saving
+UserSchema.pre('save', async function(next) {
+    if (!this.isModified('password')) return next();
+    const salt = await bcrypt.genSalt(10);
+    this.password = await bcrypt.hash(this.password, salt);
+    next();
+});
+const User = mongoose.model('User', UserSchema);
+
+const ProductSchema = new mongoose.Schema({
+    name: { type: String, required: true },
+    description: { type: String, required: true },
+    price: { type: Number, required: true },
+    stock: { type: Number, required: true, default: 0 },
+    seller: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true } // REQUIRED FIELD
+});
+const Product = mongoose.model('Product', ProductSchema);
+
+const OrderSchema = new mongoose.Schema({
+    buyer: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    seller: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    product: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true },
+    price: { type: Number, required: true },
+    deliveryFee: { type: Number, required: true, default: 1500 },
+    commission: { type: Number, required: true },
+    status: { type: String, enum: ['pending', 'shipped', 'delivered'], default: 'pending' },
+    createdAt: { type: Date, default: Date.now }
+});
+const Order = mongoose.model('Order', OrderSchema);
+
+// --- JWT Authentication Middleware ---
 const auth = (req, res, next) => {
+    const token = req.header('Authorization')?.replace('Bearer ', '');
+    if (!token) {
+        return res.status(401).json({ error: 'Authentication required.' });
+    }
     try {
-        const token = req.header('Authorization').replace('Bearer ', '');
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        req.user = decoded; 
-        next(); 
-    } catch (e) {
-        res.status(401).send({ error: 'Authentication required.' });
+        const decoded = jwt.verify(token, JWT_SECRET);
+        req.user = decoded;
+        next();
+    } catch (err) {
+        res.status(401).json({ error: 'Invalid or expired token.' });
     }
 };
 
-// --- USER REGISTRATION ROUTE ---
+// --- API Routes ---
+
+// 1. Register Route (Simplified for quick setup)
 app.post('/api/register', async (req, res) => {
     try {
         const { name, email, password, role } = req.body;
-        if (!email || !password) return res.status(400).json({ error: "Please enter all required fields" });
-        const existingUser = await User.findOne({ email });
-
-        if (existingUser) {
-            const salt = await bcrypt.genSalt(10);
-            existingUser.password = await bcrypt.hash(password, salt);
-            existingUser.role = role || 'buyer';
-            await existingUser.save();
-
-            const token = jwt.sign({ id: existingUser._id, role: existingUser.role }, process.env.JWT_SECRET, { expiresIn: '1h' });
-            return res.status(200).json({
-                message: "User updated successfully!",
-                token,
-                user: { id: existingUser._id, name: existingUser.name, email: existingUser.email, role: existingUser.role }
-            });
-        }
-
-        const salt = await bcrypt.genSalt(10);
-        const hashedPassword = await bcrypt.hash(password, salt);
-        const newUser = new User({ name, email, password: hashedPassword, role: role || 'buyer' });
-        const savedUser = await newUser.save();
-
-        const token = jwt.sign({ id: savedUser._id, role: savedUser.role }, process.env.JWT_SECRET, { expiresIn: '1h' });
-        res.status(201).json({
-            message: "User registered successfully!",
-            token,
-            user: { id: savedUser._id, name: savedUser.name, email: savedUser.email, role: savedUser.role }
-        });
+        const user = new User({ name, email, password, role });
+        await user.save();
+        res.status(201).json({ message: 'User registered successfully. Please log in.' });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        res.status(400).json({ error: err.message });
     }
 });
 
-// --- USER LOGIN ROUTE ---
+// 2. Login Route
 app.post('/api/login', async (req, res) => {
     try {
         const { email, password } = req.body;
         const user = await User.findOne({ email });
-        if (!user) return res.status(400).json({ error: "User not found" });
-
-        const isMatch = await bcrypt.compare(password, user.password);
-        if (!isMatch) return res.status(400).json({ error: "Invalid credentials" });
-
-        const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: '1h' });
-
-        res.json({
-            token,
-            user: { id: user._id, email: user.email, role: user.role }
-        });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
-// GET ALL PRODUCTS (Protected Route)
-app.get('/api/products', auth, async (req, res) => {
-    try {
-        // CRITICAL FIX: Populate the seller field to send the seller object to the Frontend
-        const products = await Product.find({})
-            .populate('seller', 'name'); 
-        res.json(products);
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
-// ORDER ROUTE (Income Logic)
-app.post('/api/orders', auth, async (req, res) => {
-    const COMMISSION_RATE = 0.10; 
-    try {
-        const { productId, price, sellerId, deliveryFee } = req.body;
-        const buyerId = req.user.id; 
-
-        if (!productId || !price || !sellerId) {
-            return res.status(400).json({ error: 'Missing required order fields: productId, price, or sellerId.' });
+        if (!user || !(await bcrypt.compare(password, user.password))) {
+            return res.status(401).json({ error: 'Invalid credentials.' });
         }
 
-        const totalAmount = price + (deliveryFee || 0);
-        const calculatedCommission = price * COMMISSION_RATE;
-
-        // Create the new order document
-        const newOrder = new Order({
-            product: productId,
-            buyer: buyerId,
-            seller: sellerId,
-            totalAmount: totalAmount, 
-            commission: calculatedCommission,
-            status: 'Placed',
-            orderDate: new Date(),
-        });
-
-        const savedOrder = await newOrder.save();
-
-        res.status(201).json({ 
-            message: 'Order created successfully. Commission tracked.',
-            order: savedOrder,
-            yourCommission: calculatedCommission
-        });
+        const token = jwt.sign({ id: user._id, role: user.role }, JWT_SECRET, { expiresIn: '1d' });
+        res.json({ token, user: { id: user._id, name: user.name, role: user.role } });
 
     } catch (err) {
-        console.error("Order creation error:", err);
-        res.status(500).json({ error: `Order creation failed: ${err.message}` });
+        res.status(500).json({ error: 'Server error during login.' });
     }
 });
 
-// Start Server
+// 3. Products Route (READ - Protected)
+app.get('/api/products', auth, async (req, res) => {
+    try {
+        // CRITICAL FIX: Populate the seller field to send full seller object to Frontend
+        const products = await Product.find().populate('seller', 'name');
+        res.json(products);
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to fetch products.' });
+    }
+});
+
+// 4. Orders Route (CREATE - Protected)
+app.post('/api/orders', auth, async (req, res) => {
+    try {
+        const { productId, price, sellerId, deliveryFee } = req.body;
+        const buyerId = req.user.id; // Extracted from JWT token
+
+        if (!sellerId) {
+            // This check serves as a backup, but the issue should be fixed by now.
+            return res.status(400).json({ error: "Seller ID is required to place an order." });
+        }
+
+        const product = await Product.findById(productId);
+        if (!product) {
+            return res.status(404).json({ error: "Product not found." });
+        }
+        if (product.stock < 1) {
+            return res.status(400).json({ error: "Product is out of stock." });
+        }
+
+        // Calculate commission
+        const commission = price * COMMISSION_RATE;
+        const netPrice = price - commission; // The amount the seller receives
+
+        const order = new Order({
+            buyer: buyerId,
+            seller: sellerId,
+            product: productId,
+            price: price,
+            deliveryFee: deliveryFee,
+            commission: commission
+        });
+
+        await order.save();
+
+        // Optionally decrement stock
+        product.stock -= 1;
+        await product.save();
+
+        res.status(201).json({ 
+            message: "Order placed successfully.", 
+            order: order, 
+            yourCommission: commission,
+            netSellerPayout: netPrice
+        });
+
+    } catch (err) {
+        console.error("Order error:", err);
+        res.status(500).json({ error: 'Failed to place order. ' + err.message });
+    }
+});
+
+// --- Server Start ---
 app.listen(PORT, () => {
-    console.log(`🚀 Server running on http://localhost:${PORT}`);
+    console.log(`Server is running on port ${PORT}`);
+});
+
+// Keep the Render service alive by listening on the root path
+app.get('/', (req, res) => {
+    res.send('SwiftLogi Backend Service is Active');
 });
