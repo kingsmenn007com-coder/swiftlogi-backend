@@ -7,15 +7,14 @@ const bcrypt = require('bcryptjs');
 const app = express();
 
 // --- Configuration ---
-// Ensure you set this in your Render environment variables!
 const MONGO_URI = process.env.MONGO_URI; 
-const JWT_SECRET = process.env.JWT_SECRET || 'SUPER_SECRET_KEY_FOR_PROTOTYPE';
+const JWT_SECRET = process.env.JWT_SECRET || 'SUPER_SECRET_KEY_FOR_PROTOTYPE'; // FIXED JWT SECRET
 const PORT = process.env.PORT || 3001;
 const COMMISSION_RATE = 0.05; // 5% commission
 
 // --- Middleware ---
-app.use(cors()); // Allows cross-origin requests from Vercel Frontend
-app.use(express.json()); // Body parser for JSON requests
+app.use(cors());
+app.use(express.json());
 
 // --- Database Connection ---
 mongoose.connect(MONGO_URI)
@@ -30,7 +29,6 @@ const UserSchema = new mongoose.Schema({
     password: { type: String, required: true },
     role: { type: String, enum: ['buyer', 'seller', 'rider', 'admin'], default: 'buyer' }
 });
-// Hash password before saving
 UserSchema.pre('save', async function(next) {
     if (!this.isModified('password')) return next();
     const salt = await bcrypt.genSalt(10);
@@ -44,7 +42,7 @@ const ProductSchema = new mongoose.Schema({
     description: { type: String, required: true },
     price: { type: Number, required: true },
     stock: { type: Number, required: true, default: 0 },
-    seller: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true } // REQUIRED FIELD
+    seller: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true }
 });
 const Product = mongoose.model('Product', ProductSchema);
 
@@ -56,6 +54,7 @@ const OrderSchema = new mongoose.Schema({
     deliveryFee: { type: Number, required: true, default: 1500 },
     commission: { type: Number, required: true },
     status: { type: String, enum: ['pending', 'shipped', 'delivered'], default: 'pending' },
+    rider: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null }, // NEW FIELD for rider
     createdAt: { type: Date, default: Date.now }
 });
 const Order = mongoose.model('Order', OrderSchema);
@@ -109,7 +108,6 @@ app.post('/api/login', async (req, res) => {
 // 3. Products Route (READ - Protected)
 app.get('/api/products', auth, async (req, res) => {
     try {
-        // CRITICAL FIX: Populate the seller field to send full seller object to Frontend
         const products = await Product.find().populate('seller', 'name');
         res.json(products);
     } catch (err) {
@@ -121,24 +119,19 @@ app.get('/api/products', auth, async (req, res) => {
 app.post('/api/orders', auth, async (req, res) => {
     try {
         const { productId, price, sellerId, deliveryFee } = req.body;
-        const buyerId = req.user.id; // Extracted from JWT token
+        const buyerId = req.user.id;
 
         if (!sellerId) {
-            // This check serves as a backup, but the issue should be fixed by now.
             return res.status(400).json({ error: "Seller ID is required to place an order." });
         }
 
         const product = await Product.findById(productId);
-        if (!product) {
-            return res.status(404).json({ error: "Product not found." });
-        }
-        if (product.stock < 1) {
-            return res.status(400).json({ error: "Product is out of stock." });
+        if (!product || product.stock < 1) {
+            return res.status(400).json({ error: "Product is out of stock or not found." });
         }
 
-        // Calculate commission
         const commission = price * COMMISSION_RATE;
-        const netPrice = price - commission; // The amount the seller receives
+        const netPrice = price - commission;
 
         const order = new Order({
             buyer: buyerId,
@@ -146,17 +139,16 @@ app.post('/api/orders', auth, async (req, res) => {
             product: productId,
             price: price,
             deliveryFee: deliveryFee,
-            commission: commission
+            commission: commission,
+            status: 'pending' // Order is pending delivery
         });
 
         await order.save();
-
-        // Optionally decrement stock
         product.stock -= 1;
         await product.save();
 
         res.status(201).json({ 
-            message: "Order placed successfully.", 
+            message: "Order placed successfully. It is now awaiting a rider.", 
             order: order, 
             yourCommission: commission,
             netSellerPayout: netPrice
@@ -168,12 +160,88 @@ app.post('/api/orders', auth, async (req, res) => {
     }
 });
 
+// 5. Rider Jobs Route (READ - Protected & Role-restricted) - NEW ROUTE
+app.get('/api/jobs', auth, async (req, res) => {
+    // Optional: Restrict access only to users with role 'rider'
+    if (req.user.role !== 'rider' && req.user.role !== 'admin') {
+        return res.status(403).json({ error: 'Access denied. Only riders can view jobs.' });
+    }
+
+    try {
+        // Find all orders that are 'pending' and have not yet been assigned a rider
+        const availableJobs = await Order.find({ 
+            status: 'pending', 
+            rider: null 
+        })
+        .populate('product', 'name description') // Get product details
+        .populate('seller', 'name')             // Get seller name
+        .populate('buyer', 'name');             // Get buyer name
+        
+        // Format the output for the rider
+        const jobsList = availableJobs.map(job => ({
+            orderId: job._id,
+            pickup: job.seller.name,
+            dropoff: job.buyer.name, // Placeholder: In a real app, this would be a real address
+            productName: job.product.name,
+            deliveryFee: job.deliveryFee,
+            commission: job.commission,
+            riderPayout: job.deliveryFee // Rider gets the full delivery fee
+        }));
+
+        res.json(jobsList);
+    } catch (err) {
+        console.error("Jobs fetch error:", err);
+        res.status(500).json({ error: 'Failed to fetch available jobs.' });
+    }
+});
+
+// 6. Accept Job Route (UPDATE - Protected & Role-restricted) - NEW ROUTE
+app.post('/api/jobs/:orderId/accept', auth, async (req, res) => {
+    if (req.user.role !== 'rider') {
+        return res.status(403).json({ error: 'Access denied. Only riders can accept jobs.' });
+    }
+
+    try {
+        const orderId = req.params.orderId;
+        const riderId = req.user.id;
+
+        // Find the job, ensure it's pending and unassigned
+        const order = await Order.findOneAndUpdate(
+            { 
+                _id: orderId, 
+                status: 'pending', 
+                rider: null 
+            },
+            { 
+                $set: { 
+                    status: 'shipped', // Status moves to shipped/in-transit
+                    rider: riderId 
+                } 
+            },
+            { new: true } // Return the updated document
+        );
+
+        if (!order) {
+            return res.status(404).json({ error: 'Job not found, already accepted, or status changed.' });
+        }
+
+        res.json({ 
+            message: `Job accepted successfully. Order is now marked as Shipped.`,
+            orderId: order._id
+        });
+
+    } catch (err) {
+        console.error("Job acceptance error:", err);
+        res.status(500).json({ error: 'Failed to accept job.' });
+    }
+});
+
+
 // --- Server Start ---
 app.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
 });
 
-// Keep the Render service alive by listening on the root path
 app.get('/', (req, res) => {
     res.send('SwiftLogi Backend Service is Active');
 });
