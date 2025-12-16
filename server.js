@@ -160,7 +160,7 @@ app.post('/api/orders', auth, async (req, res) => {
     }
 });
 
-// 5. Rider Jobs Route (READ - Protected & Role-restricted) - NEW ROUTE
+// 5. Rider Jobs Route (READ - Protected & Role-restricted)
 app.get('/api/jobs', auth, async (req, res) => {
     // Optional: Restrict access only to users with role 'rider'
     if (req.user.role !== 'rider' && req.user.role !== 'admin') {
@@ -181,11 +181,11 @@ app.get('/api/jobs', auth, async (req, res) => {
         const jobsList = availableJobs.map(job => ({
             orderId: job._id,
             pickup: job.seller.name,
-            dropoff: job.buyer.name, // Placeholder: In a real app, this would be a real address
+            dropoff: job.buyer.name, 
             productName: job.product.name,
             deliveryFee: job.deliveryFee,
             commission: job.commission,
-            riderPayout: job.deliveryFee // Rider gets the full delivery fee
+            riderPayout: job.deliveryFee 
         }));
 
         res.json(jobsList);
@@ -195,7 +195,7 @@ app.get('/api/jobs', auth, async (req, res) => {
     }
 });
 
-// 6. Accept Job Route (UPDATE - Protected & Role-restricted) - NEW ROUTE
+// 6. Accept Job Route (UPDATE - Protected & Role-restricted)
 app.post('/api/jobs/:orderId/accept', auth, async (req, res) => {
     if (req.user.role !== 'rider') {
         return res.status(403).json({ error: 'Access denied. Only riders can accept jobs.' });
@@ -233,6 +233,39 @@ app.post('/api/jobs/:orderId/accept', auth, async (req, res) => {
     } catch (err) {
         console.error("Job acceptance error:", err);
         res.status(500).json({ error: 'Failed to accept job.' });
+    }
+});
+
+
+// 7. Get User Orders Route (READ - Protected) - NEW ROUTE
+app.get('/api/user/orders', auth, async (req, res) => {
+    const userId = req.user.id;
+    const userRole = req.user.role;
+
+    let query = {};
+    
+    // Filter orders based on the user's role
+    if (userRole === 'buyer') {
+        query = { buyer: userId };
+    } else if (userRole === 'seller' || userRole === 'admin') {
+        // Sellers/Admins see all orders associated with them
+        query = { seller: userId };
+    } else {
+        // Riders see orders assigned to them (shipped or delivered)
+        query = { rider: userId, status: { $in: ['shipped', 'delivered'] } };
+    }
+
+    try {
+        // Fetch orders, populating product and rider info for context
+        const orders = await Order.find(query)
+            .populate('product', 'name')
+            .populate('rider', 'name')
+            .sort({ createdAt: -1 }); // Show newest orders first
+
+        res.json(orders);
+    } catch (err) {
+        console.error("Failed to fetch user orders:", err);
+        res.status(500).json({ error: 'Failed to fetch order history.' });
     }
 });
 
