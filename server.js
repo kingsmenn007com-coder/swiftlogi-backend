@@ -9,7 +9,7 @@ const app = express();
 // --- Configuration ---
 // Ensure you set this in your Render environment variables!
 const MONGO_URI = process.env.MONGO_URI; 
-const JWT_SECRET = process.env.JWT_SECRET || 'your_fallback_secret_key'; // CHANGE THIS!
+const JWT_SECRET = process.env.JWT_SECRET || 'SUPER_SECRET_KEY_FOR_PROTOTYPE';
 const PORT = process.env.PORT || 3001;
 const COMMISSION_RATE = 0.05; // 5% commission
 
