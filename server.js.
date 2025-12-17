@@ -1,0 +1,79 @@
+const express = require('express');
+const mongoose = require('mongoose');
+const cors = require('cors');
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
+
+const app = express();
+const MONGO_URI = process.env.MONGO_URI; 
+const JWT_SECRET = process.env.JWT_SECRET || 'SUPER_SECRET_KEY_FOR_PROTOTYPE';
+const PORT = process.env.PORT || 3001;
+
+app.use(cors());
+app.use(express.json());
+
+mongoose.connect(MONGO_URI).then(() => console.log('MongoDB connected')).catch(err => console.error(err));
+
+const UserSchema = new mongoose.Schema({
+    name: { type: String, required: true },
+    email: { type: String, required: true, unique: true },
+    password: { type: String, required: true },
+    role: { type: String, enum: ['buyer', 'seller', 'rider', 'admin'], default: 'buyer' }
+});
+
+UserSchema.pre('save', async function(next) {
+    if (!this.isModified('password')) return next();
+    this.password = await bcrypt.hash(this.password, 10);
+    next();
+});
+
+const User = mongoose.model('User', UserSchema);
+const Order = mongoose.model('Order', new mongoose.Schema({
+    buyer: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    seller: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    product: { type: mongoose.Schema.Types.ObjectId, ref: 'Product' },
+    price: Number,
+    deliveryFee: { type: Number, default: 1500 },
+    status: { type: String, enum: ['pending', 'shipped', 'delivered'], default: 'pending' },
+    rider: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    createdAt: { type: Date, default: Date.now }
+}));
+
+const Product = mongoose.model('Product', new mongoose.Schema({
+    name: String, price: Number, seller: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+}));
+
+app.post('/api/register', async (req, res) => {
+    try {
+        const { name, email, password, role } = req.body;
+        let user = await User.findOne({ email });
+        if (user) {
+            user.password = password;
+            await user.save();
+            return res.status(200).json({ message: 'Updated.' });
+        }
+        user = new User({ name, email, password, role });
+        await user.save();
+        res.status(201).json({ message: 'Registered.' });
+    } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.post('/api/login', async (req, res) => {
+    const user = await User.findOne({ email: req.body.email });
+    if (!user || !(await bcrypt.compare(req.body.password, user.password))) return res.status(401).json({ error: 'Invalid' });
+    const token = jwt.sign({ id: user._id, role: user.role }, JWT_SECRET);
+    res.json({ token, user: { id: user._id, name: user.name, role: user.role } });
+});
+
+app.get('/api/products', async (req, res) => { res.json(await Product.find().populate('seller')); });
+
+app.get('/api/user/orders', async (req, res) => {
+    res.json(await Order.find().populate('product').populate('rider').sort({ createdAt: -1 }));
+});
+
+app.post('/api/jobs/:orderId/deliver', async (req, res) => {
+    const order = await Order.findByIdAndUpdate(req.params.orderId, { status: 'delivered' }, { new: true });
+    res.json({ message: 'Delivered', order });
+});
+
+app.listen(PORT, () => console.log(`Server on ${PORT}`));
