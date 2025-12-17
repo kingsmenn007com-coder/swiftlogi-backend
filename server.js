@@ -15,23 +15,18 @@ app.use(express.json());
 mongoose.connect(MONGO_URI).then(() => console.log('MongoDB connected')).catch(err => console.error(err));
 
 // --- Schemas ---
-const UserSchema = new mongoose.Schema({
+const User = mongoose.model('User', new mongoose.Schema({
     name: { type: String, required: true },
     email: { type: String, required: true, unique: true },
     password: { type: String, required: true },
-    role: { type: String, enum: ['buyer', 'seller', 'rider', 'admin'], default: 'buyer' }
-});
-
-UserSchema.pre('save', async function(next) {
-    if (!this.isModified('password')) return next();
-    this.password = await bcrypt.hash(this.password, 10);
-    next();
-});
-
-const User = mongoose.model('User', UserSchema);
+    role: { type: String, enum: ['user', 'rider'], default: 'user' } // Unified 'user' for Buy/Sell
+}));
 
 const Product = mongoose.model('Product', new mongoose.Schema({
-    name: String, price: Number, seller: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+    name: String, 
+    price: Number, 
+    seller: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    sellerName: String
 }));
 
 const Order = mongoose.model('Order', new mongoose.Schema({
@@ -49,51 +44,40 @@ const Order = mongoose.model('Order', new mongoose.Schema({
 app.post('/api/register', async (req, res) => {
     try {
         const { name, email, password, role } = req.body;
-        let user = await User.findOne({ email });
-        if (user) {
-            user.password = password; 
-            await user.save();
-            return res.status(200).json({ message: 'Updated.' });
-        }
-        user = new User({ name, email, password, role });
+        const hashedPassword = await bcrypt.hash(password, 10);
+        const user = new User({ name, email, password: hashedPassword, role });
         await user.save();
         res.status(201).json({ message: 'Registered.' });
-    } catch (err) { res.status(400).json({ error: err.message }); }
+    } catch (err) { res.status(400).json({ error: 'Email already exists' }); }
 });
 
 app.post('/api/login', async (req, res) => {
     const user = await User.findOne({ email: req.body.email });
-    if (!user || !(await bcrypt.compare(req.body.password, user.password))) return res.status(401).json({ error: 'Invalid' });
+    if (!user || !(await bcrypt.compare(req.body.password, user.password))) return res.status(401).json({ error: 'Invalid credentials' });
     const token = jwt.sign({ id: user._id, role: user.role }, JWT_SECRET);
     res.json({ token, user: { id: user._id, name: user.name, role: user.role } });
 });
 
-app.get('/api/products', async (req, res) => { res.json(await Product.find().populate('seller')); });
+app.get('/api/products', async (req, res) => { res.json(await Product.find()); });
 
-// ROOT FIX: Independent User History Logic
-app.get('/api/user/orders/:userId', async (req, res) => {
+app.post('/api/orders', async (req, res) => {
     try {
-        const { userId } = req.params;
-        // Only find orders where the user is either the buyer, seller, or rider
-        const orders = await Order.find({
-            $or: [
-                { buyer: userId },
-                { seller: userId },
-                { rider: userId }
-            ]
-        }).populate('product').populate('rider').sort({ createdAt: -1 });
-        res.json(orders);
-    } catch (err) { res.status(500).json({ error: 'Failed to fetch personal history' }); }
+        const { productId, buyerId, sellerId, price } = req.body;
+        const order = new Order({ product: productId, buyer: buyerId, seller: sellerId, price, deliveryFee: 2500 });
+        await order.save();
+        res.status(201).json(order);
+    } catch (err) { res.status(400).json({ error: 'Order failed' }); }
+});
+
+app.get('/api/user/orders/:userId', async (req, res) => {
+    const { userId } = req.params;
+    const orders = await Order.find({ $or: [{ buyer: userId }, { seller: userId }, { rider: userId }] })
+        .populate('product').sort({ createdAt: -1 });
+    res.json(orders);
 });
 
 app.get('/api/jobs', async (req, res) => {
-    // Riders see only available (pending) jobs
     res.json(await Order.find({ status: 'pending', rider: null }).populate('product'));
-});
-
-app.post('/api/jobs/:orderId/deliver', async (req, res) => {
-    await Order.findByIdAndUpdate(req.params.orderId, { status: 'delivered' });
-    res.json({ message: 'Delivered' });
 });
 
 app.listen(PORT, () => console.log(`Server on ${PORT}`));
