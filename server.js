@@ -15,7 +15,6 @@ app.use(express.json());
 mongoose.connect(MONGO_URI).then(() => console.log('MongoDB connected')).catch(err => console.error(err));
 
 // --- Schemas ---
-
 const User = mongoose.model('User', new mongoose.Schema({
     name: { type: String, required: true },
     email: { type: String, required: true, unique: true },
@@ -26,95 +25,60 @@ const User = mongoose.model('User', new mongoose.Schema({
 const Product = mongoose.model('Product', new mongoose.Schema({
     name: String, 
     price: Number, 
-    seller: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+    location: String,
+    seller: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    sellerName: String,
+    createdAt: { type: Date, default: Date.now }
 }));
 
-// Memory Lock: Order schema supporting both Cart items and Rider Payouts
 const Order = mongoose.model('Order', new mongoose.Schema({
     buyer: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-    items: [{
-        product: { type: mongoose.Schema.Types.ObjectId, ref: 'Product' },
-        name: String,
-        price: Number,
-        quantity: { type: Number, default: 1 }
-    }],
+    items: [{ product: { type: mongoose.Schema.Types.ObjectId, ref: 'Product' }, name: String, price: Number, quantity: Number }],
     totalPrice: Number,
-    deliveryFee: { type: Number, default: 1500 },
-    status: { type: String, enum: ['pending', 'shipped', 'delivered'], default: 'pending' },
+    status: { type: String, enum: ['pending', 'shipped', 'delivered', 'cancelled'], default: 'pending' },
     rider: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     createdAt: { type: Date, default: Date.now }
 }));
 
 // --- Routes ---
-
 app.post('/api/register', async (req, res) => {
     try {
-        const { name, email, password, role } = req.body;
-        const hashedPassword = await bcrypt.hash(password, 10);
-        const user = new User({ name, email, password: hashedPassword, role });
+        const hashedPassword = await bcrypt.hash(req.body.password, 10);
+        const user = new User({ ...req.body, password: hashedPassword });
         await user.save();
         res.status(201).json({ message: 'Registered.' });
-    } catch (err) { res.status(400).json({ error: 'Email already exists' }); }
+    } catch (err) { res.status(400).json({ error: 'User exists' }); }
 });
 
 app.post('/api/login', async (req, res) => {
     const user = await User.findOne({ email: req.body.email });
-    if (!user || !(await bcrypt.compare(req.body.password, user.password))) {
-        return res.status(401).json({ error: 'Invalid credentials' });
-    }
-    const token = jwt.sign({ id: user._id, role: user.role }, JWT_SECRET);
-    res.json({ token, user: { id: user._id, name: user.name, role: user.role } });
+    if (!user || !(await bcrypt.compare(req.body.password, user.password))) return res.status(401).json({ error: 'Invalid' });
+    res.json({ token: jwt.sign({ id: user._id }, JWT_SECRET), user: { id: user._id, name: user.name, role: user.role } });
 });
 
-app.get('/api/products', async (req, res) => { 
-    res.json(await Product.find()); 
+// NEW: Upload Product Route
+app.post('/api/products', async (req, res) => {
+    try {
+        const product = new Product(req.body);
+        await product.save();
+        res.status(201).json(product);
+    } catch (err) { res.status(400).json({ error: 'Upload failed' }); }
 });
 
-// Checkout Route for Multi-item Cart
+app.get('/api/products', async (req, res) => { res.json(await Product.find().sort({ createdAt: -1 })); });
+
 app.post('/api/orders', async (req, res) => {
-    try {
-        const { buyerId, items, totalPrice } = req.body;
-        const order = new Order({ 
-            buyer: buyerId, 
-            items, 
-            totalPrice, 
-            deliveryFee: 1500 
-        });
-        await order.save();
-        res.status(201).json(order);
-    } catch (err) { res.status(400).json({ error: 'Checkout failed' }); }
+    const order = new Order(req.body);
+    await order.save();
+    res.status(201).json(order);
 });
 
-// DASHBOARD INDEPENDENCE: Filtered history by Role and ID
 app.get('/api/user/orders/:userId', async (req, res) => {
-    try {
-        const { userId } = req.params;
-        const user = await User.findById(userId);
-        let query = {};
-
-        if (user.role === 'rider') {
-            query = { rider: userId };
-        } else {
-            query = { buyer: userId };
-        }
-
-        const orders = await Order.find(query).populate('items.product').sort({ createdAt: -1 });
-        res.json(orders);
-    } catch (err) { res.status(500).json({ error: 'Error fetching history' }); }
+    res.json(await Order.find({ $or: [{ buyer: req.params.userId }, { rider: req.params.userId }] }).populate('items.product').sort({ createdAt: -1 }));
 });
 
-// Rider-Specific Job Feed
 app.get('/api/jobs', async (req, res) => {
     res.json(await Order.find({ status: 'pending', rider: null }));
-});
-
-app.post('/api/jobs/:orderId/accept', async (req, res) => {
-    const { riderId } = req.body;
-    await Order.findByIdAndUpdate(req.params.orderId, { 
-        rider: riderId, 
-        status: 'shipped' 
-    });
-    res.json({ message: 'Job Accepted' });
 });
 
 app.listen(PORT, () => console.log(`Server on ${PORT}`));
