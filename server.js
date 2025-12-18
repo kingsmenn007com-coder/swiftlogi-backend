@@ -15,7 +15,6 @@ app.use(express.json());
 mongoose.connect(MONGO_URI).then(() => console.log('MongoDB connected')).catch(err => console.error(err));
 
 // --- Schemas ---
-
 const User = mongoose.model('User', new mongoose.Schema({
     name: { type: String, required: true },
     email: { type: String, required: true, unique: true },
@@ -23,34 +22,25 @@ const User = mongoose.model('User', new mongoose.Schema({
     role: { type: String, enum: ['user', 'rider'], default: 'user' }
 }));
 
-// Added location and sellerName for Marketplace transparency
 const Product = mongoose.model('Product', new mongoose.Schema({
     name: String, 
     price: Number, 
-    location: { type: String, default: 'Nigeria' },
+    location: String,
     seller: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     sellerName: String,
-    image: { type: String, default: '' }, // For future actual image uploads
     createdAt: { type: Date, default: Date.now }
 }));
 
 const Order = mongoose.model('Order', new mongoose.Schema({
     buyer: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-    items: [{
-        product: { type: mongoose.Schema.Types.ObjectId, ref: 'Product' },
-        name: String,
-        price: Number,
-        quantity: { type: Number, default: 1 }
-    }],
+    items: [{ product: { type: mongoose.Schema.Types.ObjectId, ref: 'Product' }, name: String, price: Number, quantity: Number }],
     totalPrice: Number,
-    deliveryFee: { type: Number, default: 2500 },
-    status: { type: String, enum: ['pending', 'shipped', 'delivered', 'cancelled'], default: 'pending' },
+    status: { type: String, enum: ['pending', 'shipped', 'delivered', 'rejected'], default: 'pending' },
     rider: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     createdAt: { type: Date, default: Date.now }
 }));
 
 // --- Routes ---
-
 app.post('/api/register', async (req, res) => {
     try {
         const hashedPassword = await bcrypt.hash(req.body.password, 10);
@@ -66,10 +56,6 @@ app.post('/api/login', async (req, res) => {
     res.json({ token: jwt.sign({ id: user._id }, JWT_SECRET), user: { id: user._id, name: user.name, role: user.role } });
 });
 
-// GET: All Products (Marketplace Search)
-app.get('/api/products', async (req, res) => { res.json(await Product.find().sort({ createdAt: -1 })); });
-
-// POST: Upload New Product
 app.post('/api/products', async (req, res) => {
     try {
         const product = new Product(req.body);
@@ -78,20 +64,18 @@ app.post('/api/products', async (req, res) => {
     } catch (err) { res.status(400).json({ error: 'Upload failed' }); }
 });
 
-// GET: Filtered history by User ID
+app.get('/api/products', async (req, res) => { res.json(await Product.find().sort({ createdAt: -1 })); });
+
+app.get('/api/user/products/:userId', async (req, res) => {
+    res.json(await Product.find({ seller: req.params.userId }).sort({ createdAt: -1 }));
+});
+
 app.get('/api/user/orders/:userId', async (req, res) => {
     res.json(await Order.find({ $or: [{ buyer: req.params.userId }, { rider: req.params.userId }] }).populate('items.product').sort({ createdAt: -1 }));
 });
 
-// GET: Rider Jobs
 app.get('/api/jobs', async (req, res) => {
-    res.json(await Order.find({ status: 'pending', rider: null }).populate('items.product'));
-});
-
-// POST: Accept Job
-app.post('/api/jobs/:orderId/accept', async (req, res) => {
-    await Order.findByIdAndUpdate(req.params.orderId, { rider: req.body.riderId, status: 'shipped' });
-    res.json({ message: 'Job Accepted' });
+    res.json(await Order.find({ status: 'pending', rider: null }));
 });
 
 app.listen(PORT, () => console.log(`Server on ${PORT}`));
