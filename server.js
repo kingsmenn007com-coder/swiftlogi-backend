@@ -1,4 +1,4 @@
-kconst express = require('express');
+const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
@@ -28,7 +28,6 @@ const Product = mongoose.model('Product', new mongoose.Schema({
     sellerName: String, createdAt: { type: Date, default: Date.now }
 }));
 
-// SOLVED CHALLENGE: Order schema supporting multiple Cart items
 const Order = mongoose.model('Order', new mongoose.Schema({
     buyer: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     items: [{
@@ -74,7 +73,6 @@ app.get('/api/user/products/:userId', async (req, res) => {
     res.json(await Product.find({ seller: req.params.userId }).sort({ createdAt: -1 }));
 });
 
-// SOLVED CHALLENGE: Cart Checkout
 app.post('/api/orders', async (req, res) => {
     try {
         const order = new Order(req.body);
