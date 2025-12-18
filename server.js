@@ -14,7 +14,7 @@ app.use(express.json({ limit: '10mb' }));
 
 mongoose.connect(MONGO_URI).then(() => console.log('MongoDB connected')).catch(err => console.error(err));
 
-// --- Schemas ---
+// --- Schemas (Memory Locked) ---
 const User = mongoose.model('User', new mongoose.Schema({
     name: { type: String, required: true },
     email: { type: String, required: true, unique: true },
@@ -35,12 +35,22 @@ const Order = mongoose.model('Order', new mongoose.Schema({
         name: String, price: Number, quantity: { type: Number, default: 1 }
     }],
     totalPrice: Number,
+    deliveryFee: { type: Number, default: 2500 },
     status: { type: String, enum: ['pending', 'shipped', 'delivered', 'rejected'], default: 'pending' },
     rider: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     createdAt: { type: Date, default: Date.now }
 }));
 
 // --- Routes ---
+app.post('/api/register', async (req, res) => {
+    try {
+        const hashedPassword = await bcrypt.hash(req.body.password, 10);
+        const user = new User({ ...req.body, password: hashedPassword });
+        await user.save();
+        res.status(201).json({ message: 'Registered.' });
+    } catch (err) { res.status(400).json({ error: 'User exists' }); }
+});
+
 app.post('/api/login', async (req, res) => {
     const user = await User.findOne({ email: req.body.email });
     if (!user || !(await bcrypt.compare(req.body.password, user.password))) return res.status(401).json({ error: 'Invalid' });
@@ -48,9 +58,11 @@ app.post('/api/login', async (req, res) => {
 });
 
 app.post('/api/products', async (req, res) => {
-    const product = new Product(req.body);
-    await product.save();
-    res.status(201).json(product);
+    try {
+        const product = new Product(req.body);
+        await product.save();
+        res.status(201).json(product);
+    } catch (err) { res.status(400).json({ error: 'Upload failed' }); }
 });
 
 app.get('/api/products', async (req, res) => { res.json(await Product.find().sort({ createdAt: -1 })); });
@@ -59,17 +71,23 @@ app.get('/api/user/products/:userId', async (req, res) => {
     res.json(await Product.find({ seller: req.params.userId }).sort({ createdAt: -1 }));
 });
 
-// ROOT FIX: Handles both Accept and Reject actions for Riders
 app.post('/api/orders', async (req, res) => {
-    const order = new Order(req.body);
-    await order.save();
-    res.status(201).json(order);
+    try {
+        const order = new Order(req.body);
+        await order.save();
+        res.status(201).json(order);
+    } catch (err) { res.status(400).json({ error: 'Checkout failed' }); }
 });
 
+// Logic to handle Rider Accept/Reject status updates
 app.post('/api/jobs/:orderId/status', async (req, res) => {
     const { status, riderId } = req.body;
     await Order.findByIdAndUpdate(req.params.orderId, { status, rider: riderId });
-    res.json({ message: `Order marked as ${status}` });
+    res.json({ message: 'Status Updated' });
+});
+
+app.get('/api/user/orders/:userId', async (req, res) => {
+    res.json(await Order.find({ $or: [{ buyer: req.params.userId }, { rider: req.params.userId }] }).populate('items.product').sort({ createdAt: -1 }));
 });
 
 app.get('/api/jobs', async (req, res) => {
