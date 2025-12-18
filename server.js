@@ -9,8 +9,8 @@ const MONGO_URI = process.env.MONGO_URI;
 const JWT_SECRET = process.env.JWT_SECRET || 'SUPER_SECRET_KEY_FOR_PROTOTYPE';
 const PORT = process.env.PORT || 3001;
 
-app.use(cors());
-app.use(express.json());
+app.use(cors({ limit: '10mb' })); // Increased limit for image uploads
+app.use(express.json({ limit: '10mb' }));
 
 mongoose.connect(MONGO_URI).then(() => console.log('MongoDB connected')).catch(err => console.error(err));
 
@@ -26,6 +26,7 @@ const Product = mongoose.model('Product', new mongoose.Schema({
     name: String, 
     price: Number, 
     location: String,
+    image: String, // Store base64 image string
     seller: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     sellerName: String,
     createdAt: { type: Date, default: Date.now }
@@ -68,10 +69,6 @@ app.get('/api/products', async (req, res) => { res.json(await Product.find().sor
 
 app.get('/api/user/products/:userId', async (req, res) => {
     res.json(await Product.find({ seller: req.params.userId }).sort({ createdAt: -1 }));
-});
-
-app.get('/api/user/orders/:userId', async (req, res) => {
-    res.json(await Order.find({ $or: [{ buyer: req.params.userId }, { rider: req.params.userId }] }).populate('items.product').sort({ createdAt: -1 }));
 });
 
 app.get('/api/jobs', async (req, res) => {
