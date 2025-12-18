@@ -1,4 +1,4 @@
-const express = require('express');
+kconst express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
@@ -9,12 +9,12 @@ const MONGO_URI = process.env.MONGO_URI;
 const JWT_SECRET = process.env.JWT_SECRET || 'SUPER_SECRET_KEY_FOR_PROTOTYPE';
 const PORT = process.env.PORT || 3001;
 
-app.use(cors({ limit: '10mb' })); // Increased limit for image uploads
+app.use(cors({ limit: '10mb' }));
 app.use(express.json({ limit: '10mb' }));
 
 mongoose.connect(MONGO_URI).then(() => console.log('MongoDB connected')).catch(err => console.error(err));
 
-// --- Schemas ---
+// --- Schemas (Memory Locked) ---
 const User = mongoose.model('User', new mongoose.Schema({
     name: { type: String, required: true },
     email: { type: String, required: true, unique: true },
@@ -23,19 +23,22 @@ const User = mongoose.model('User', new mongoose.Schema({
 }));
 
 const Product = mongoose.model('Product', new mongoose.Schema({
-    name: String, 
-    price: Number, 
-    location: String,
-    image: String, // Store base64 image string
+    name: String, price: Number, location: String, image: String,
     seller: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-    sellerName: String,
-    createdAt: { type: Date, default: Date.now }
+    sellerName: String, createdAt: { type: Date, default: Date.now }
 }));
 
+// SOLVED CHALLENGE: Order schema supporting multiple Cart items
 const Order = mongoose.model('Order', new mongoose.Schema({
     buyer: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-    items: [{ product: { type: mongoose.Schema.Types.ObjectId, ref: 'Product' }, name: String, price: Number, quantity: Number }],
+    items: [{
+        product: { type: mongoose.Schema.Types.ObjectId, ref: 'Product' },
+        name: String,
+        price: Number,
+        quantity: { type: Number, default: 1 }
+    }],
     totalPrice: Number,
+    deliveryFee: { type: Number, default: 2500 },
     status: { type: String, enum: ['pending', 'shipped', 'delivered', 'rejected'], default: 'pending' },
     rider: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     createdAt: { type: Date, default: Date.now }
@@ -69,6 +72,19 @@ app.get('/api/products', async (req, res) => { res.json(await Product.find().sor
 
 app.get('/api/user/products/:userId', async (req, res) => {
     res.json(await Product.find({ seller: req.params.userId }).sort({ createdAt: -1 }));
+});
+
+// SOLVED CHALLENGE: Cart Checkout
+app.post('/api/orders', async (req, res) => {
+    try {
+        const order = new Order(req.body);
+        await order.save();
+        res.status(201).json(order);
+    } catch (err) { res.status(400).json({ error: 'Checkout failed' }); }
+});
+
+app.get('/api/user/orders/:userId', async (req, res) => {
+    res.json(await Order.find({ $or: [{ buyer: req.params.userId }, { rider: req.params.userId }] }).populate('items.product').sort({ createdAt: -1 }));
 });
 
 app.get('/api/jobs', async (req, res) => {
