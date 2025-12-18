@@ -28,6 +28,7 @@ const Product = mongoose.model('Product', new mongoose.Schema({
     sellerName: String, createdAt: { type: Date, default: Date.now }
 }));
 
+// CORE FIX: Order schema explicitly supporting the Cart (items array)
 const Order = mongoose.model('Order', new mongoose.Schema({
     buyer: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     items: [{
@@ -73,6 +74,7 @@ app.get('/api/user/products/:userId', async (req, res) => {
     res.json(await Product.find({ seller: req.params.userId }).sort({ createdAt: -1 }));
 });
 
+// CORE FIX: Multi-item Cart Order Route
 app.post('/api/orders', async (req, res) => {
     try {
         const order = new Order(req.body);
